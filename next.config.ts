@@ -1,6 +1,11 @@
-import type {NextConfig} from 'next';
+import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
+  experimental: {
+    allowedDevOrigins: [
+      '*.cloudworkstations.dev',
+    ],
+  },
   /* config options here */
   typescript: {
     ignoreBuildErrors: true,
@@ -20,4 +25,4 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+module.exports = nextConfig;

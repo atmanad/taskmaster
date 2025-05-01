@@ -22,46 +22,56 @@ export function TaskList({ listType }: TaskListProps) {
   const [newTask, setNewTask] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [currentDate, setCurrentDate] = useState<string>('');
+  const [currentDate, setCurrentDate] = useState<string>(''); // Initialize empty, will be set client-side
   const { toast } = useToast(); // Initialize toast
 
+  // Set current date ONLY on client-side mount
   useEffect(() => {
-    // Set current date on client-side mount
-    setCurrentDate(format(new Date(), 'yyyy-MM-dd'));
-  }, []);
+    console.log("TaskList: Component mounted, setting current date.");
+    const today = format(new Date(), 'yyyy-MM-dd');
+    setCurrentDate(today);
+    console.log(`TaskList: Current date set to ${today}`);
+  }, []); // Empty dependency array ensures this runs once on mount
 
 
-  // Fetch tasks whenever listType or currentDate (if relevant) changes
+  // Fetch tasks whenever listType or currentDate changes (if relevant)
   useEffect(() => {
-    // Prevent fetching daily tasks until currentDate is set
+    console.log(`TaskList: Effect triggered. listType: ${listType}, currentDate: ${currentDate}`);
+    // Prevent fetching daily tasks until currentDate is actually set by the client-side effect
     if (listType === 'daily' && !currentDate) {
-        setLoading(false); // Stop loading indicator if date isn't ready
+        console.log("TaskList: Skipping fetch for daily tasks, currentDate not yet set.");
+        // Keep loading true until date is set, or set false if you prefer showing "loading date..."
+        // setLoading(false);
         return;
     }
 
     const fetchTasks = async () => {
+      console.log(`TaskList: Starting fetchTasks for ${listType}, date: ${currentDate || 'N/A'}`);
       setLoading(true);
       setError(null);
       try {
         const fetchedTasks = await getTodos(listType, listType === 'daily' ? currentDate : undefined);
+        console.log(`TaskList: Received ${fetchedTasks.length} tasks from getTodos.`);
         setTasks(fetchedTasks);
+        setError(null); // Clear any previous errors on successful fetch
       } catch (err: any) {
-        console.error(`Error fetching ${listType} tasks:`, err);
+        console.error(`TaskList: Error fetching ${listType} tasks:`, err);
         const errorMessage = err.message || `Failed to load ${listType} tasks. Please try again later.`;
-        setError(errorMessage);
+        setError(errorMessage); // Set error state to display in UI
         toast({ // Show error toast
             variant: "destructive",
             title: `Error loading ${listType} tasks`,
             description: errorMessage,
         });
       } finally {
+        console.log(`TaskList: Finished fetchTasks for ${listType}. Setting loading to false.`);
         setLoading(false);
       }
     };
 
     fetchTasks();
-    // Dependency array ensures fetch runs when type or date changes
-  }, [listType, currentDate, toast]);
+    // Dependency array includes currentDate for daily tasks
+  }, [listType, currentDate, toast]); // Add toast here if it's stable, otherwise remove if it causes re-runs
 
   const handleAddTask = async (e: FormEvent) => {
     e.preventDefault();
@@ -69,6 +79,7 @@ export function TaskList({ listType }: TaskListProps) {
     if (!trimmedTask) return;
     if (listType === 'daily' && !currentDate) {
         const msg = "Cannot add daily task: Date not initialized.";
+        console.error("TaskList: " + msg);
         setError(msg);
         toast({ variant: "destructive", title: "Error", description: msg });
         return;
@@ -90,8 +101,9 @@ export function TaskList({ listType }: TaskListProps) {
     setError(null); // Clear previous errors
 
     try {
-      // Call backend to add task
+      console.log(`TaskList: Calling addTodo for task: "${trimmedTask}"`);
       const addedTodo = await addTodo(taskToAdd);
+      console.log(`TaskList: addTodo successful. New task ID: ${addedTodo.id}`);
       // Replace optimistic task with the real one from backend
       setTasks((prevTasks) =>
         prevTasks.map((task) => (task.id === optimisticId ? addedTodo : task))
@@ -101,7 +113,7 @@ export function TaskList({ listType }: TaskListProps) {
          description: `"${addedTodo.text}" was added successfully.`,
        });
     } catch (err: any) {
-        console.error("Error adding task:", err);
+        console.error("TaskList: Error adding task:", err);
         const errorMessage = err.message || `Failed to add task. Please try again.`;
         setError(errorMessage);
         // Revert optimistic update
@@ -126,13 +138,15 @@ export function TaskList({ listType }: TaskListProps) {
       setError(null); // Clear previous errors
 
     try {
+      console.log(`TaskList: Calling updateTodo for task ${id}, setting completed to ${!completed}`);
       await updateTodo(id, { completed: !completed });
+      console.log(`TaskList: updateTodo successful for task ${id}.`);
        toast({ // Success toast
          title: "Task Updated",
          description: `Task status changed.`,
        });
     } catch (err: any) {
-        console.error("Error updating task:", err);
+        console.error(`TaskList: Error updating task ${id}:`, err);
         const errorMessage = err.message || `Failed to update task status. Please try again.`;
         setError(errorMessage);
          // Revert optimistic update on failure
@@ -152,13 +166,15 @@ export function TaskList({ listType }: TaskListProps) {
       setError(null); // Clear previous errors
 
     try {
+      console.log(`TaskList: Calling deleteTodo for task ${id} ("${text}")`);
       await deleteTodo(id);
+      console.log(`TaskList: deleteTodo successful for task ${id}.`);
        toast({ // Success toast
          title: "Task Deleted",
          description: `"${text}" was deleted.`,
        });
     } catch (err: any) {
-      console.error("Error deleting task:", err);
+      console.error(`TaskList: Error deleting task ${id}:`, err);
       const errorMessage = err.message || `Failed to delete task. Please try again.`;
       setError(errorMessage);
       // Revert optimistic update on failure
@@ -176,7 +192,7 @@ export function TaskList({ listType }: TaskListProps) {
   const completedTasks = tasks.filter((task) => task.completed);
 
   // Format date for display, handle case where currentDate might not be set yet
-   const displayDate = currentDate ? format(new Date(currentDate + 'T00:00:00'), 'MMMM d, yyyy') : 'Loading...';
+   const displayDate = currentDate ? format(new Date(currentDate + 'T00:00:00'), 'MMMM d, yyyy') : 'Loading date...';
 
 
   return (
@@ -185,9 +201,9 @@ export function TaskList({ listType }: TaskListProps) {
         {listType === 'daily' ? `Today's Tasks (${displayDate})` : 'Global Tasks'}
       </h2>
 
-       {error && !loading && ( // Only show error if not loading
+       {error && !loading && ( // Only show general error if not loading AND fetch failed
          <div className="bg-destructive/10 text-destructive p-3 rounded-md mb-4 text-sm border border-destructive/30">
-             {error}
+             Error: {error} {/* Display the error message */}
          </div>
        )}
 
@@ -199,9 +215,15 @@ export function TaskList({ listType }: TaskListProps) {
           placeholder={`Add a new ${listType} task...`}
           className="flex-grow"
           aria-label={`New ${listType} task`}
+           // Disable if loading OR if it's daily tasks and date isn't ready
           disabled={loading || (listType === 'daily' && !currentDate)}
         />
-        <Button type="submit" disabled={!newTask.trim() || loading || (listType === 'daily' && !currentDate)} aria-label={`Add ${listType} task`}>
+        <Button
+           type="submit"
+           // Disable if no text, loading, OR daily tasks and date isn't ready
+           disabled={!newTask.trim() || loading || (listType === 'daily' && !currentDate)}
+           aria-label={`Add ${listType} task`}
+        >
           <Plus className="h-4 w-4 mr-1" />
           Add
         </Button>
@@ -210,13 +232,15 @@ export function TaskList({ listType }: TaskListProps) {
       <div className="flex-grow overflow-y-auto space-y-2 pr-1 scroll-smooth">
         {loading ? (
            <div className="space-y-3">
+             <p className="text-muted-foreground text-center mt-8">Loading tasks...</p>
              <TaskItemSkeleton />
              <TaskItemSkeleton />
              <TaskItemSkeleton />
            </div>
          ) : (
           <>
-            {tasks.length === 0 && (
+             {/* Show "No tasks" only if NOT loading and NOT errored and tasks array is empty */}
+             {!loading && !error && tasks.length === 0 && (
               <p className="text-muted-foreground text-center mt-8">
                 No {listType} tasks yet. Add one above!
               </p>
