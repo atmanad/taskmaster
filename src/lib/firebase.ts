@@ -1,3 +1,4 @@
+
 import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
 import {
   getFirestore,
@@ -15,7 +16,7 @@ import {
   QueryDocumentSnapshot,
   FirestoreDataConverter,
   WithFieldValue,
-  orderBy // Import orderBy
+  // No longer importing orderBy here as sorting will be done client-side
 } from 'firebase/firestore';
 
 // Your web app's Firebase configuration
@@ -146,135 +147,103 @@ if (!todosCollection) {
 }
 
 
-// Get Todos function
+// Get Todos function (Modified to fetch all by type and filter/sort client-side)
 export const getTodos = async (type: 'daily' | 'global', date?: string): Promise<Todo[]> => {
-  let q;
-
   // --- Start Pre-fetch Checks ---
-  console.log(`[getTodos] Initiating fetch - Type: ${type}, Date: ${date || 'N/A'}`);
+  console.log(`[getTodos - Client Filter] Initiating fetch - Type: ${type}, Date for filtering (if daily): ${date || 'N/A'}`);
 
-  // Log the environment variable value *at the time of the call*
   const currentProjectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
-  console.log(`[getTodos] Current NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${currentProjectId}`);
+  console.log(`[getTodos - Client Filter] Current NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${currentProjectId}`);
 
   if (!db || !todosCollection) {
-      console.error("[getTodos] CRITICAL: Firestore DB or Collection reference is not initialized. Cannot fetch tasks. Check Firebase config and initialization logs.");
-      // Return empty array or throw error based on desired behavior
+      console.error("[getTodos - Client Filter] CRITICAL: Firestore DB or Collection reference is not initialized. Cannot fetch tasks.");
       return [];
-      // Or: throw new Error("Firestore is not available. Check configuration.");
   }
 
-  // Re-check config values at the time of fetch (belt and suspenders)
   if (!firebaseConfig.projectId || !currentProjectId) {
-      console.error("[getTodos] CRITICAL: Firebase Project ID is missing at fetch time. Check environment variables (e.g., NEXT_PUBLIC_FIREBASE_PROJECT_ID). Config value:", firebaseConfig.projectId, "process.env value:", currentProjectId);
+      console.error("[getTodos - Client Filter] CRITICAL: Firebase Project ID is missing at fetch time.");
       return [];
   }
-   console.log(`[getTodos] Pre-fetch checks passed. DB and Collection are available. Project ID confirmed: ${currentProjectId}`);
+   console.log(`[getTodos - Client Filter] Pre-fetch checks passed. DB and Collection are available. Project ID confirmed: ${currentProjectId}`);
    // --- End Pre-fetch Checks ---
 
+   let queryDescription = `type == ${type}`; // Description for logging
 
-  try {
-      let queryDescription = `type == ${type}`; // Description for logging
+   try {
+      // Simplified query: Fetch all documents matching the 'type' only.
+      // Removed where('date', ...) and orderBy(...) to avoid composite index requirement.
+      const q = query(
+          todosCollection,
+          where('type', '==', type)
+      );
+      console.log(`[getTodos - Client Filter] Constructed simple Firestore query: where type == '${type}'`);
 
-      if (type === 'daily') {
-        if (!date) {
-            console.warn("[getTodos] Date is required for fetching daily todos, but not provided. Returning empty array.");
-            return []; // Return empty if no date provided for daily tasks
-        }
-        // Query for tasks matching the specific type AND date, ordered by creation time
-        queryDescription += `, date == ${date}`;
-        q = query(
-            todosCollection, // Use the converter-applied collection
-            where('type', '==', 'daily'),
-            where('date', '==', date),
-            orderBy('createdAt', 'asc') // Order by creation time ascending
-        );
-        console.log(`[getTodos] Constructed Firestore query for DAILY tasks: where type == 'daily', where date == '${date}', orderBy createdAt asc`);
-      } else {
-        // Query for tasks matching only the 'global' type, ordered by creation time
-        q = query(
-            todosCollection, // Use the converter-applied collection
-            where('type', '==', 'global'),
-            orderBy('createdAt', 'asc') // Order by creation time ascending
-        );
-        console.log("[getTodos] Constructed Firestore query for GLOBAL tasks: where type == 'global', orderBy createdAt asc");
-      }
-
-      console.log(`[getTodos] Executing Firestore query...`);
+      console.log(`[getTodos - Client Filter] Executing Firestore query...`);
       const querySnapshot = await getDocs(q);
-      console.log(`[getTodos] Firestore query executed. Found ${querySnapshot.docs.length} raw documents.`);
+      console.log(`[getTodos - Client Filter] Firestore query executed. Found ${querySnapshot.docs.length} raw documents of type '${type}'.`);
 
-      // Log raw snapshot data before conversion (optional, for deep debugging)
-      if (querySnapshot.docs.length > 0) {
-          console.log("[getTodos] -------- Raw Document Data Start --------")
-          querySnapshot.docs.forEach(doc => {
-              console.log(`[getTodos] Raw doc ID: ${doc.id}, Data:`, JSON.stringify(doc.data({ serverTimestamps: 'none' }))); // Log raw data without estimates
-          });
-          console.log("[getTodos] -------- Raw Document Data End --------")
-      } else {
-          console.log("[getTodos] No raw documents found matching the query.");
-      }
-
-
-      // Firestore automatically uses the converter here when mapping .data()
-      // Explicitly call the converter for clarity in logs
-      console.log("[getTodos] Starting conversion of raw documents using todoConverter.fromFirestore...");
-      const todos = querySnapshot.docs.map(doc => {
-          console.log(`[getTodos] Converting document ID: ${doc.id}`);
-          // The .data() call here implicitly uses the converter attached to todosCollection
+      // Conversion (same as before)
+      console.log("[getTodos - Client Filter] Starting conversion of raw documents using todoConverter.fromFirestore...");
+      const allTodosOfType = querySnapshot.docs.map(doc => {
           try {
               const convertedData = doc.data(); // This triggers fromFirestore
-              console.log(`[getTodos] Successfully converted document ID: ${doc.id}`);
               return convertedData;
           } catch (conversionError) {
-              console.error(`[getTodos] Error converting document ID: ${doc.id}`, conversionError);
-              console.error(`[getTodos] Raw data for failed conversion:`, doc.data({ serverTimestamps: 'none' }));
-              return null; // Return null for failed conversions
+              console.error(`[getTodos - Client Filter] Error converting document ID: ${doc.id}`, conversionError);
+              return null;
           }
-      }).filter(todo => todo !== null) as Todo[]; // Filter out any nulls from failed conversions
+      }).filter(todo => todo !== null) as Todo[];
+      console.log(`[getTodos - Client Filter] Finished conversion. ${allTodosOfType.length} todos of type '${type}' converted.`);
 
-      console.log(`[getTodos] Finished conversion. Number of successfully converted todos: ${todos.length}`);
-
-      // Log the *converted* data structure
-      if (todos.length > 0) {
-          console.log(`[getTodos] First CONVERTED todo (id: ${todos[0].id}):`, JSON.stringify(todos[0], null, 2)); // Log full structure safely
-      } else {
-          console.log("[getTodos] No todos after conversion (either none found or conversion failed).");
-      }
-
-      console.log("[getTodos] Fetch successful. Returning converted todos.");
-      return todos; // Return the converted todos
-  } catch (error: any) { // Catch error as 'any' to access properties like 'code'
-      console.error(`[getTodos] CATCH BLOCK: Error getting ${type} documents (Date: ${date}): `, error);
-      console.error(`[getTodos] Error Details: Code: ${error.code}, Message: ${error.message}, Stack: ${error.stack}`);
-      // Check for specific Firebase errors if needed
-      let errorMessage = `Failed to fetch ${type} tasks.`;
-      if (error.code) {
-        console.error("[getTodos] Firestore error code:", error.code);
-        // Provide more specific messages based on common Vercel/Firestore issues
-        if (error.code === 'permission-denied') {
-            errorMessage = `Permission denied fetching ${type} tasks (Date: ${date}). Check Firestore security rules in Firebase Console. Ensure the environment running the code has necessary permissions.`;
-        } else if (error.code === 'unauthenticated') {
-             errorMessage = `Authentication error fetching ${type} tasks. Check Firestore rules for auth requirements.`;
-        } else if (error.code === 'unavailable') {
-            errorMessage = `Firestore service unavailable. Check Firebase status (status.firebase.google.com) and network settings.`;
-        } else if (error.code === 'internal') {
-             errorMessage = `Firestore internal error (${error.code}). This might be transient. Check Firebase status.`;
-        } else if (error.code === 'unimplemented' || error.message?.toLowerCase().includes('index')) {
-             errorMessage = `Firestore query requires an index. Check the error message in the console/logs for a link to create the necessary index in the Firebase Console. Query: ${queryDescription}`;
-        } else {
-            errorMessage = `Firestore error (${error.code}) fetching ${type} tasks. Query: ${queryDescription}. Check console, Firestore rules, and indexes.`;
+      // Client-side Filtering (for daily tasks) and Sorting
+      let finalTodos: Todo[];
+      if (type === 'daily') {
+        if (!date) {
+          console.warn("[getTodos - Client Filter] Date is required for filtering daily todos, but not provided. Returning empty array.");
+          return [];
         }
+        console.log(`[getTodos - Client Filter] Filtering daily tasks client-side for date: ${date}`);
+        finalTodos = allTodosOfType.filter(todo => todo.date === date);
+        console.log(`[getTodos - Client Filter] Found ${finalTodos.length} daily tasks matching the date after client-side filtering.`);
       } else {
-           errorMessage = `Failed to fetch ${type} tasks (Date: ${date}). Unknown error: ${error.message || error}. Check console, rules, and config.`;
+        finalTodos = allTodosOfType; // No date filtering needed for global tasks
+        console.log(`[getTodos - Client Filter] Using all ${finalTodos.length} global tasks (no date filtering).`);
       }
-      // Throwing here will propagate the error to the calling component (TaskList)
-      throw new Error(errorMessage);
-  }
+
+      // Client-side Sorting by createdAt
+      console.log(`[getTodos - Client Filter] Sorting ${finalTodos.length} tasks client-side by createdAt ascending...`);
+      finalTodos.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+
+      // Log the *final, filtered, and sorted* data structure
+      if (finalTodos.length > 0) {
+          console.log(`[getTodos - Client Filter] First final todo (id: ${finalTodos[0].id}):`, JSON.stringify(finalTodos[0], null, 2));
+      } else {
+          console.log("[getTodos - Client Filter] No todos remaining after client-side filtering/sorting.");
+      }
+
+      console.log("[getTodos - Client Filter] Fetch and client-side processing successful. Returning final todos.");
+      return finalTodos;
+
+   } catch (error: any) {
+       console.error(`[getTodos - Client Filter] CATCH BLOCK: Error during Firestore fetch for type ${type}: `, error);
+       console.error(`[getTodos - Client Filter] Error Details: Code: ${error.code}, Message: ${error.message}, Stack: ${error.stack}`);
+       let errorMessage = `Failed to fetch ${type} tasks.`;
+       if (error.code) {
+           // Less likely to hit index errors now, but keep other checks
+           if (error.code === 'permission-denied') {
+               errorMessage = `Permission denied fetching ${type} tasks. Check Firestore security rules.`;
+           } else {
+                errorMessage = `Firestore error (${error.code}) fetching ${type} tasks. Query: ${queryDescription}. Check console, Firestore rules.`;
+           }
+       } else {
+           errorMessage = `Failed to fetch ${type} tasks. Unknown error: ${error.message || error}. Check console, rules, and config.`;
+       }
+       throw new Error(errorMessage);
+   }
 };
 
 
-// Add Todo function
+// Add Todo function (remains the same)
 export const addTodo = async (todoData: Omit<Todo, 'id'>): Promise<Todo> => {
    console.log("[addTodo] Initiating add operation...");
    if (!db || !todosCollection) {
@@ -282,23 +251,18 @@ export const addTodo = async (todoData: Omit<Todo, 'id'>): Promise<Todo> => {
         throw new Error("Firestore is not initialized. Check configuration.");
    }
    try {
-     // Ensure createdAt is a valid Date object and other fields are present
      const dataToSave: Omit<Todo, 'id'> = {
-       text: todoData.text || '', // Ensure text is not undefined
-       completed: todoData.completed ?? false, // Default completed to false
-       createdAt: new Date(), // Always use current date/time for creation
-       date: todoData.date, // Keep as provided (null for global, string for daily)
+       text: todoData.text || '',
+       completed: todoData.completed ?? false,
+       createdAt: new Date(),
+       date: todoData.date,
        type: todoData.type,
      };
      console.log(`[addTodo] Data prepared for Firestore:`, dataToSave);
-     // Use the collection reference with the converter
-     // The converter handles the conversion to Firestore data types (e.g., Timestamp)
      console.log(`[addTodo] Calling addDoc on todosCollection...`);
      const docRef = await addDoc(todosCollection, dataToSave); // This triggers toFirestore
 
      console.log(`[addTodo] addDoc successful. New document ID: ${docRef.id}`);
-     // Construct the full Todo object including the new ID and return it
-     // Use the data that was intended to be saved, plus the generated ID
      const addedTodo = { ...dataToSave, id: docRef.id };
      console.log(`[addTodo] Returning successfully added Todo:`, addedTodo);
      return addedTodo;
@@ -318,22 +282,18 @@ export const addTodo = async (todoData: Omit<Todo, 'id'>): Promise<Todo> => {
    }
 };
 
-// Update Todo function
+// Update Todo function (remains the same)
 export const updateTodo = async (id: string, updates: Partial<Pick<Todo, 'completed' | 'text'>>): Promise<void> => {
   console.log(`[updateTodo] Initiating update for doc ID: ${id} with updates:`, updates);
-  if (!db) { // Use the base db check
+  if (!db) {
     console.error("[updateTodo] CRITICAL: Firestore is not initialized. Cannot update task.");
     throw new Error("Firestore is not initialized. Check configuration.");
   }
-  // Get a non-converted doc reference for the update payload flexibility
-  // Need to ensure db is valid before creating the doc ref
-  const todoDocRef = doc(collection(db, 'todos'), id); // Create ref using base collection
+  const todoDocRef = doc(collection(db, 'todos'), id);
   console.log(`[updateTodo] Document reference created for ID: ${id}`);
 
    try {
     console.log(`[updateTodo] Calling updateDoc...`);
-    // updateDoc doesn't use the converter automatically for the payload,
-    // but it operates on the correct document path.
     await updateDoc(todoDocRef, updates);
     console.log(`[updateTodo] updateDoc successful for ID: ${id}`);
    } catch (error: any) {
@@ -352,14 +312,13 @@ export const updateTodo = async (id: string, updates: Partial<Pick<Todo, 'comple
    }
 };
 
-// Delete Todo function
+// Delete Todo function (remains the same)
 export const deleteTodo = async (id: string): Promise<void> => {
   console.log(`[deleteTodo] Initiating delete for doc ID: ${id}`);
-  if (!db) { // Use the base db check
+  if (!db) {
     console.error("[deleteTodo] CRITICAL: Firestore is not initialized. Cannot delete task.");
     throw new Error("Firestore is not initialized. Check configuration.");
   }
-  // Create ref using base collection
   const todoDocRef = doc(collection(db, 'todos'), id);
   console.log(`[deleteTodo] Document reference created for ID: ${id}`);
    try {
