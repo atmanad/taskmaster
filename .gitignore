@@ -4,32 +4,41 @@
 /node_modules
 /.pnp
 .pnp.js
+.yarn/install-state.gz
 
 # Testing
 /coverage
 
-# Next.js specific ignores
+# Next.js build files
 /.next/
 /out/
 
 # Production
 /build
 
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
 # Misc
 .DS_Store
 *.pem
 
-# Logs
+# Debugging
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
+*.log
 
-# Local env files
+# Local Env Files
 .env*.local
+.env
 
 # Editor directories and files
 .vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
 !.vscode/extensions.json
 .idea
 *.suo
@@ -38,7 +47,5 @@ pnpm-debug.log*
 *.sln
 *.sw?
 
-# Firebase specific ignores
-*.firebase
-*.firebaserc
-firebase-debug.log
+# Firebase Emulators
+firebase-debug.log*

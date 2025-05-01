@@ -13,11 +13,12 @@ import {
   Firestore,
   DocumentData,
   QueryDocumentSnapshot,
-  FirestoreDataConverter
+  FirestoreDataConverter,
+  orderBy // Import orderBy
 } from 'firebase/firestore';
 
 // Your web app's Firebase configuration
-// IMPORTANT: Replace with your actual Firebase config
+// IMPORTANT: Check if your environment variables are correctly set
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
@@ -36,7 +37,8 @@ if (!getApps().length) {
 }
 
 const db: Firestore = getFirestore(app);
-const todosCollection = collection(db, 'todos');
+// Apply converter at the base collection level
+const todosCollectionRef = collection(db, 'todos');
 
 // Define the Todo interface
 export interface Todo {
@@ -51,17 +53,19 @@ export interface Todo {
 // Firestore data converter
 const todoConverter: FirestoreDataConverter<Todo> = {
   toFirestore(todo: Omit<Todo, 'id'>): DocumentData {
+    // Ensure createdAt is always a Date before converting
+    const createdAtDate = todo.createdAt instanceof Date ? todo.createdAt : new Date();
     return {
       text: todo.text,
       completed: todo.completed,
       // Store dates as Firestore Timestamps for proper querying/sorting
-      createdAt: Timestamp.fromDate(todo.createdAt),
+      createdAt: Timestamp.fromDate(createdAtDate),
       date: todo.date,
       type: todo.type,
     };
   },
   fromFirestore(snapshot: QueryDocumentSnapshot<DocumentData>): Todo {
-    const data = snapshot.data();
+    const data = snapshot.data({ serverTimestamps: 'estimate' }); // Use estimate for smoother client-side updates
     // Convert Firestore Timestamp back to JavaScript Date
     const createdAt = data.createdAt instanceof Timestamp ? data.createdAt.toDate() : new Date();
     return {
@@ -75,33 +79,49 @@ const todoConverter: FirestoreDataConverter<Todo> = {
   }
 };
 
+// Get a reference to the collection with the converter applied
+const todosCollection = todosCollectionRef.withConverter(todoConverter);
+
 
 // Get Todos function
 export const getTodos = async (type: 'daily' | 'global', date?: string): Promise<Todo[]> => {
   let q;
-  const todosRef = collection(db, 'todos').withConverter(todoConverter);
-
-  if (type === 'daily') {
-    if (!date) {
-        console.warn("Date is required for fetching daily todos.");
-        return []; // Or throw an error
-    }
-    // Query for tasks matching the specific type AND date
-    q = query(todosRef, where('type', '==', 'daily'), where('date', '==', date));
-  } else {
-    // Query for tasks matching only the 'global' type
-    q = query(todosRef, where('type', '==', 'global'));
-  }
 
   try {
+      if (type === 'daily') {
+        if (!date) {
+            console.warn("Date is required for fetching daily todos.");
+            return []; // Return empty if no date provided for daily tasks
+        }
+        // Query for tasks matching the specific type AND date, ordered by creation time
+        q = query(
+            todosCollection, // Use the converter-applied collection
+            where('type', '==', 'daily'),
+            where('date', '==', date),
+            orderBy('createdAt', 'asc') // Order by creation time ascending
+        );
+      } else {
+        // Query for tasks matching only the 'global' type, ordered by creation time
+        q = query(
+            todosCollection, // Use the converter-applied collection
+            where('type', '==', 'global'),
+            orderBy('createdAt', 'asc') // Order by creation time ascending
+        );
+      }
+
       const querySnapshot = await getDocs(q);
+      // Firestore automatically uses the converter here
       const todos = querySnapshot.docs.map(doc => doc.data());
-       // Sort by creation date if needed, Firestore might return them ordered by index
-       todos.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+      // No need for client-side sort anymore
       return todos;
   } catch (error) {
       console.error("Error getting documents: ", error);
-      throw error; // Re-throw the error to be handled by the caller
+      // Check for specific Firebase errors if needed
+      if (error instanceof Error && 'code' in error) {
+        // Handle specific Firestore error codes, e.g., 'permission-denied'
+        console.error("Firestore error code:", (error as any).code);
+      }
+      throw new Error(`Failed to fetch ${type} tasks. Please check console and Firestore rules.`); // Throw a more informative error
   }
 };
 
@@ -109,33 +129,41 @@ export const getTodos = async (type: 'daily' | 'global', date?: string): Promise
 // Add Todo function
 export const addTodo = async (todoData: Omit<Todo, 'id'>): Promise<Todo> => {
    try {
-     const docRef = await addDoc(todosCollection.withConverter(todoConverter), todoData);
+     // Ensure createdAt is a valid Date object
+     const dataToSave = {
+       ...todoData,
+       createdAt: todoData.createdAt instanceof Date ? todoData.createdAt : new Date(),
+     };
+     // Use the collection reference with the converter
+     const docRef = await addDoc(todosCollection, dataToSave);
      // Construct the full Todo object including the new ID and return it
-     return { ...todoData, id: docRef.id };
+     // Use the data that was actually saved
+     return { ...dataToSave, id: docRef.id };
    } catch (error) {
      console.error("Error adding document: ", error);
-     throw error;
+     throw new Error("Failed to add task. Please check console and Firestore rules.");
    }
 };
 
 // Update Todo function
 export const updateTodo = async (id: string, updates: Partial<Pick<Todo, 'completed' | 'text'>>): Promise<void> => {
-  const todoDoc = doc(db, 'todos', id);
+  // Get a non-converted doc reference for the update payload flexibility
+  const todoDoc = doc(todosCollectionRef, id);
    try {
     await updateDoc(todoDoc, updates);
    } catch (error) {
      console.error("Error updating document: ", error);
-     throw error;
+     throw new Error("Failed to update task. Please check console and Firestore rules.");
    }
 };
 
 // Delete Todo function
 export const deleteTodo = async (id: string): Promise<void> => {
-  const todoDoc = doc(db, 'todos', id);
+  const todoDoc = doc(todosCollectionRef, id);
    try {
      await deleteDoc(todoDoc);
    } catch (error) {
      console.error("Error deleting document: ", error);
-     throw error;
+      throw new Error("Failed to delete task. Please check console and Firestore rules.");
    }
 };
