@@ -18,7 +18,7 @@ import {
 } from 'firebase/firestore';
 
 // Your web app's Firebase configuration
-// IMPORTANT: Check if your environment variables are correctly set
+// IMPORTANT: Check if your environment variables are correctly set in your Vercel project settings.
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
@@ -27,6 +27,16 @@ const firebaseConfig = {
   messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
+
+// Basic check if configuration seems loaded
+if (!firebaseConfig.projectId) {
+  console.error(
+    'Firebase project ID is missing. Ensure NEXT_PUBLIC_FIREBASE_PROJECT_ID environment variable is set correctly in your deployment environment (e.g., Vercel).'
+  );
+  // Optionally, you could throw an error here to prevent the app from proceeding without config,
+  // but logging might be sufficient for debugging.
+  // throw new Error("Firebase configuration is incomplete. Project ID is missing.");
+}
 
 // Initialize Firebase
 let app: FirebaseApp;
@@ -87,6 +97,15 @@ const todosCollection = todosCollectionRef.withConverter(todoConverter);
 export const getTodos = async (type: 'daily' | 'global', date?: string): Promise<Todo[]> => {
   let q;
 
+  // Log inputs for debugging purposes, especially in production environments
+  console.log(`Fetching todos - Type: ${type}, Date: ${date}`);
+  // Check if Firebase config seems available at the time of fetching
+  if (!firebaseConfig.projectId) {
+      console.error("Attempted to fetch todos, but Firebase Project ID is missing. Check environment variables.");
+      throw new Error("Firebase configuration is missing. Cannot fetch tasks.");
+  }
+
+
   try {
       if (type === 'daily') {
         if (!date) {
@@ -112,16 +131,29 @@ export const getTodos = async (type: 'daily' | 'global', date?: string): Promise
       const querySnapshot = await getDocs(q);
       // Firestore automatically uses the converter here
       const todos = querySnapshot.docs.map(doc => doc.data());
+      console.log(`Successfully fetched ${todos.length} ${type} todos.`); // Log success
       // No need for client-side sort anymore
       return todos;
-  } catch (error) {
-      console.error("Error getting documents: ", error);
+  } catch (error: any) { // Catch error as 'any' to access properties like 'code'
+      console.error(`Error getting ${type} documents (Date: ${date}): `, error);
       // Check for specific Firebase errors if needed
-      if (error instanceof Error && 'code' in error) {
-        // Handle specific Firestore error codes, e.g., 'permission-denied'
-        console.error("Firestore error code:", (error as any).code);
+      let errorMessage = `Failed to fetch ${type} tasks.`;
+      if (error.code) {
+        console.error("Firestore error code:", error.code);
+        // Provide more specific messages based on common Vercel/Firestore issues
+        if (error.code === 'permission-denied') {
+            errorMessage = `Permission denied when fetching ${type} tasks. Check your Firestore security rules.`;
+        } else if (error.code === 'unauthenticated') {
+             errorMessage = `Authentication error when fetching ${type} tasks. Ensure user is logged in or rules allow unauthenticated access.`;
+        } else if (error.code === 'unavailable') {
+            errorMessage = `Firestore service is unavailable. This might be a temporary issue or network problem.`;
+        } else {
+            errorMessage = `Failed to fetch ${type} tasks due to Firestore error (${error.code}). Check console and Firestore rules.`;
+        }
+      } else {
+           errorMessage = `Failed to fetch ${type} tasks. Unknown error occurred. Please check console and Firestore rules/configuration.`;
       }
-      throw new Error(`Failed to fetch ${type} tasks. Please check console and Firestore rules.`); // Throw a more informative error
+      throw new Error(errorMessage); // Throw a more informative error
   }
 };
 
@@ -138,10 +170,20 @@ export const addTodo = async (todoData: Omit<Todo, 'id'>): Promise<Todo> => {
      const docRef = await addDoc(todosCollection, dataToSave);
      // Construct the full Todo object including the new ID and return it
      // Use the data that was actually saved
+     console.log(`Todo added with ID: ${docRef.id}`);
      return { ...dataToSave, id: docRef.id };
-   } catch (error) {
+   } catch (error: any) {
      console.error("Error adding document: ", error);
-     throw new Error("Failed to add task. Please check console and Firestore rules.");
+     let errorMessage = "Failed to add task.";
+      if (error.code) {
+         errorMessage = `Failed to add task due to Firestore error (${error.code}). Check console and Firestore rules.`;
+         if (error.code === 'permission-denied') {
+             errorMessage = `Permission denied when adding task. Check Firestore rules.`;
+         }
+      } else {
+          errorMessage = "Failed to add task. Unknown error. Check console and Firestore rules.";
+      }
+     throw new Error(errorMessage);
    }
 };
 
@@ -151,9 +193,19 @@ export const updateTodo = async (id: string, updates: Partial<Pick<Todo, 'comple
   const todoDoc = doc(todosCollectionRef, id);
    try {
     await updateDoc(todoDoc, updates);
-   } catch (error) {
-     console.error("Error updating document: ", error);
-     throw new Error("Failed to update task. Please check console and Firestore rules.");
+    console.log(`Todo updated: ${id}`);
+   } catch (error: any) {
+     console.error(`Error updating document ${id}: `, error);
+     let errorMessage = "Failed to update task.";
+      if (error.code) {
+          errorMessage = `Failed to update task due to Firestore error (${error.code}). Check console and Firestore rules.`;
+          if (error.code === 'permission-denied') {
+             errorMessage = `Permission denied when updating task ${id}. Check Firestore rules.`;
+          }
+      } else {
+          errorMessage = `Failed to update task ${id}. Unknown error. Check console and Firestore rules.`;
+      }
+     throw new Error(errorMessage);
    }
 };
 
@@ -162,8 +214,18 @@ export const deleteTodo = async (id: string): Promise<void> => {
   const todoDoc = doc(todosCollectionRef, id);
    try {
      await deleteDoc(todoDoc);
-   } catch (error) {
-     console.error("Error deleting document: ", error);
-      throw new Error("Failed to delete task. Please check console and Firestore rules.");
+     console.log(`Todo deleted: ${id}`);
+   } catch (error: any) {
+     console.error(`Error deleting document ${id}: `, error);
+     let errorMessage = "Failed to delete task.";
+      if (error.code) {
+          errorMessage = `Failed to delete task due to Firestore error (${error.code}). Check console and Firestore rules.`;
+          if (error.code === 'permission-denied') {
+             errorMessage = `Permission denied when deleting task ${id}. Check Firestore rules.`;
+          }
+      } else {
+          errorMessage = `Failed to delete task ${id}. Unknown error. Check console and Firestore rules.`;
+      }
+     throw new Error(errorMessage);
    }
 };
